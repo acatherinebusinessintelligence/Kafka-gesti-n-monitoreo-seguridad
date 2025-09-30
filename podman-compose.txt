@@ -1,0 +1,16 @@
+# 0) Variables (ajusta la ruta si tu YAML está en otro sitio)
+COMPOSE=podman-compose-kafka-3B.yml
+PROJ=kafka-lab
+
+# 1) Asegura Zookeeper arriba (por si acaso)
+podman-compose -f "$COMPOSE" -p "$PROJ" up -d zookeeper
+
+# 2) Levanta los 3 brokers
+podman-compose -f "$COMPOSE" -p "$PROJ" up -d kafka1 kafka2 kafka3
+
+# 3) Verifica
+podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}  {{.Ports}}"
+
+# 4) Prueba DNS y registro en ZK
+podman exec -it kafka1 bash -lc 'getent hosts zookeeper || echo NO-RESUELVE'
+podman exec -it kafka1 bash -lc "zookeeper-shell zookeeper:2181 ls /brokers/ids"
