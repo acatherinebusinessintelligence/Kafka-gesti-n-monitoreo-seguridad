@@ -39,18 +39,18 @@ footer{text-align:center;color:#64748b;margin-top:24px;font-size:12px}
 
   <section class="card">
     <h2>¿Cómo encaja con Kafka?</h2>
-    <p>El flujo es: <b>Topic Kafka</b> → <b>Kafka Connect (JDBC Sink)</b> → <b>PostgreSQL</b>. El conector lee mensajes del tópico y escribe filas en la base. Como es una BD relacional, el conector necesita tipos; por eso usamos mensajes <b>con esquema</b> (JSON con <code>schema</code>/<code>payload</code>) o Avro/Protobuf.</p>
-<pre><button class="copy">Copiar</button><code>[ productores ]  --->  (topic: orders_schema)  --->  [ Kafka Connect - JDBC Sink ]  --->  [ PostgreSQL: tabla orders ]</code></pre>
-    <p class="note"><b>Prerrequisitos:</b> clúster Kafka arriba (<code>zookeeper</code>, <code>kafka1</code>, <code>kafka2</code>, <code>kafka3</code>) y todos en la misma red (normalmente <code>kafka-lab_default</code>).</p>
+    <p>Flujo: <b>Topic Kafka</b> → <b>Kafka Connect (JDBC Sink)</b> → <b>PostgreSQL</b>. El conector lee del tópico y escribe filas en la BD. Como es relacional, necesita tipos ⇒ usamos mensajes <b>con esquema</b> (JSON con <code>schema</code>/<code>payload</code>) o Avro/Protobuf.</p>
+<pre><button class="copy">Copiar</button><code>[ productores ]  --->  (topic: ordersschema)  --->  [ Kafka Connect - JDBC Sink ]  --->  [ PostgreSQL: tabla orders ]</code></pre>
+    <p class="note"><b>Prerrequisitos:</b> clúster Kafka activo (<code>zookeeper</code>, <code>kafka1</code>, <code>kafka2</code>, <code>kafka3</code>) y todos en la misma red (normalmente <code>kafka-lab_default</code>).</p>
 <pre><button class="copy">Copiar</button><code>podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}"
-# Descubrir el nombre real de la red tomando el zookeeper
 NET=$(podman inspect zookeeper -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
 echo "$NET"   # debería ser kafka-lab_default</code></pre>
+    <p class="warn"><b>Nombre del tópico:</b> usamos <code>ordersschema</code> (sin guion bajo) para evitar el warning de colisión <code>._</code> en métricas.</p>
   </section>
 
   <section class="card">
-    <h2>1) Crear el archivo <code>podman-compose-postgres.yml</code></h2>
-    <p>Guárdalo en tu carpeta del laboratorio. Usa la <b>misma red</b> externa del clúster (<code>kafka-lab_default</code>).</p>
+    <h2>1) Archivo <code>podman-compose-postgres.yml</code></h2>
+    <p>Guárdalo en tu carpeta del lab. Usa la <b>misma red externa</b> del clúster (<code>kafka-lab_default</code>).</p>
 <pre><button class="copy">Copiar</button><code>version: "3.8"
 
 services:
@@ -94,12 +94,12 @@ services:
 networks:
   kafka-lab_default:
     external: true</code></pre>
-    <p class="warn"><b>Nota:</b> La red externa debe existir. Si no existe, créala: <code>podman network create kafka-lab_default</code>.</p>
+    <p class="warn"><b>Nota:</b> Si la red no existe: <code>podman network create kafka-lab_default</code>.</p>
   </section>
 
   <section class="card">
     <h2>2) Levantar Postgres (+pgAdmin opcional)</h2>
-<pre><button class="copy">Copiar</button><code># Sólo la base de datos
+<pre><button class="copy">Copiar</button><code># Sólo la base
 podman-compose -f podman-compose-postgres.yml -p kafka-lab up -d postgres
 
 # Con pgAdmin también
@@ -107,17 +107,12 @@ podman-compose -f podman-compose-postgres.yml -p kafka-lab up -d pgadmin
 
 # Verifica
 podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}  {{.Ports}}"</code></pre>
-    <p>pgAdmin queda en <code>http://localhost:8081</code> (usuario <code>admin@example.com</code> / clave <code>admin123</code>). Registra el servidor:</p>
-    <ul>
-      <li><b>Host</b>: <code>postgres</code> (si pgAdmin está en contenedor) o <code>localhost</code> (si accedes desde el host).</li>
-      <li><b>Port</b>: <code>5432</code> · <b>DB</b>: <code>demo</code> · <b>User</b>: <code>demo</code> · <b>Pass</b>: <code>demo</code>.</li>
-    </ul>
+    <p>pgAdmin: <code>http://localhost:8081</code> (usuario <code>admin@example.com</code> / clave <code>admin123</code>).</p>
   </section>
 
   <section class="card">
     <h2>3) Probar conectividad desde Kafka</h2>
-<pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc 'getent hosts postgres || echo NO-RESUELVE'
-# Debe devolver la IP del contenedor postgres dentro de la red del lab</code></pre>
+<pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc 'getent hosts postgres || echo NO-RESUELVE'</code></pre>
   </section>
 
   <section class="card">
@@ -128,20 +123,21 @@ podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}  {{.Ports}}"</code></
    echo "plugin.path=/usr/share/java,/usr/share/confluent-hub-components" >> /etc/kafka/connect-distributed.properties)'
 podman restart connect
 curl -s http://localhost:8083/connector-plugins | grep -i jdbc</code></pre>
-    <h3>4.2 Driver JDBC de Postgres</h3>
+    <h3>4.2 Asegurar driver JDBC de Postgres</h3>
 <pre><button class="copy">Copiar</button><code>podman exec -it connect bash -lc 'cd /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib && \
   (ls -1 | grep -i postgresql- || curl -LO https://jdbc.postgresql.org/download/postgresql-42.7.4.jar)'
 podman restart connect</code></pre>
   </section>
 
   <section class="card">
-    <h2>5) Tópico de entrada y mensajes <i>con esquema</i></h2>
-<pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
-  "kafka-topics --create --if-not-exists --topic orders_schema \
+    <h2>5) Crear tópico y enviar mensajes <i>con esquema</i></h2>
+<pre><button class="copy">Copiar</button><code># Crear topic sin underscore
+podman exec -it kafka1 bash -lc \
+  "kafka-topics --create --if-not-exists --topic ordersschema \
    --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
 
-# Enviar 3 eventos válidos (JSON con schema/payload)
-cat > orders_schema.jsonl <<'JSONL'
+# Archivo con 3 eventos (JSON con schema/payload)
+cat > ordersschema.jsonl <<'JSONL'
 {"schema":{"type":"struct","name":"orders_value","optional":false,"fields":[
   {"field":"order_id","type":"int32","optional":false},
   {"field":"customer","type":"string","optional":false},
@@ -159,22 +155,21 @@ cat > orders_schema.jsonl <<'JSONL'
 ]},"payload":{"order_id":1003,"customer":"eva","amount":18.5}}
 JSONL
 
-cat orders_schema.jsonl | podman exec -i kafka1 bash -lc \
-  "kafka-console-producer --bootstrap-server kafka1:29092 --topic orders_schema"</code></pre>
-    <p class="warn">Si antes se enviaron mensajes truncados, borra y recrea el tópico antes de producir de nuevo.</p>
+# Enviar sin modo interactivo
+cat ordersschema.jsonl | podman exec -i kafka1 bash -lc \
+  "kafka-console-producer --bootstrap-server kafka1:29092 --topic ordersschema"</code></pre>
   </section>
 
   <section class="card">
     <h2>6) Crear/Actualizar el JDBC Sink</h2>
-<pre><button class="copy">Copiar</button><code># Crear (o actualizar con PUT) el conector
-curl -sS -X PUT http://localhost:8083/connectors/jdbc-sink-orders/config \
+<pre><button class="copy">Copiar</button><code>curl -sS -X PUT http://localhost:8083/connectors/jdbc-sink-orders/config \
   -H 'Content-Type: application/json' \
   --data-binary @- <<'JSON'
 {
   "name": "jdbc-sink-orders",
   "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
   "tasks.max": "1",
-  "topics": "orders_schema",
+  "topics": "ordersschema",
   "connection.url": "jdbc:postgresql://postgres:5432/demo",
   "connection.user": "demo",
   "connection.password": "demo",
@@ -189,7 +184,7 @@ curl -sS -X PUT http://localhost:8083/connectors/jdbc-sink-orders/config \
   "errors.tolerance": "all",
   "errors.log.enable": "true",
   "errors.log.include.messages": "true",
-  "errors.deadletterqueue.topic.name": "dlq.orders_schema",
+  "errors.deadletterqueue.topic.name": "dlq.ordersschema",
   "errors.deadletterqueue.context.headers.enable": "true",
   "errors.deadletterqueue.topic.replication.factor": "3"
 }
@@ -203,31 +198,53 @@ curl -sS http://localhost:8083/connectors/jdbc-sink-orders/status</code></pre>
     <h2>7) Verificar en Postgres</h2>
 <pre><button class="copy">Copiar</button><code>podman exec -it postgres bash -lc \
   'psql -U demo -d demo -h localhost -c "SELECT * FROM orders ORDER BY order_id;"'</code></pre>
-    <p>Si no aparece la tabla <code>orders</code>, revisa el estado del conector y los logs.</p>
-<pre><button class="copy">Copiar</button><code>podman logs -f --tail=200 connect</code></pre>
   </section>
 
   <section class="card">
-    <h2>8) Problemas comunes</h2>
+    <h2>8) Script útil: <code>create_topic.sh</code></h2>
+    <p>Para crear tópicos sin escribir <code>podman exec</code> cada vez:</p>
+<pre><button class="copy">Copiar</button><code>#!/bin/bash
+# Uso: ./create_topic.sh &lt;topic_name&gt; [partitions] [replication]
+PARTITIONS=${2:-3}
+REPLICATION=${3:-3}
+BROKER="kafka1:29092"
+
+if [ -z "$1" ]; then
+  echo "Uso: $0 &lt;topic_name&gt; [partitions] [replication]"
+  exit 1
+fi
+
+TOPIC=$1
+echo "Creando tópico '$TOPIC' con $PARTITIONS particiones y RF=$REPLICATION..."
+
+podman exec -it kafka1 bash -lc \
+  "kafka-topics --create --if-not-exists \
+   --topic $TOPIC --partitions $PARTITIONS \
+   --replication-factor $REPLICATION --bootstrap-server $BROKER"
+
+podman exec -it kafka1 bash -lc \
+  "kafka-topics --describe --topic $TOPIC --bootstrap-server $BROKER"</code></pre>
+  </section>
+
+  <section class="card">
+    <h2>9) Problemas comunes</h2>
     <ul>
       <li><b>Driver faltante</b>: “No suitable driver for jdbc:postgresql” → instala el JAR y reinicia Connect.</li>
-      <li><b>Mensajes sin esquema</b>: “non-null Struct schema” → usa JSON con <code>schema/payload</code> o Avro/Protobuf.</li>
+      <li><b>Sin esquema</b>: “non-null Struct schema” → usa JSON con <code>schema/payload</code>.</li>
       <li><b>Mensaje truncado</b>: <code>JsonEOFException</code> → recrea el tópico y produce desde archivo.</li>
-      <li><b>Red</b>: <code>NO-RESUELVE</code> → conecta los contenedores a la misma red del lab.</li>
-      <li><b>Credenciales</b>: “password authentication failed” → verifica user/clave y que la DB exista.</li>
+      <li><b>Red</b>: <code>NO-RESUELVE</code> → misma red externa del lab.</li>
+      <li><b>Credenciales</b>: “password authentication failed” → valida user/clave y DB <code>demo</code>.</li>
     </ul>
   </section>
 
   <section class="card">
-    <h2>9) Limpieza</h2>
-<pre><button class="copy">Copiar</button><code># Parar servicios
-podman-compose -f podman-compose-postgres.yml -p kafka-lab down
-
+    <h2>10) Limpieza</h2>
+<pre><button class="copy">Copiar</button><code>podman-compose -f podman-compose-postgres.yml -p kafka-lab down
 # (opcional) borrar datos persistidos
 rm -rf ./pgdata</code></pre>
   </section>
 
-  <footer>Guía — PostgreSQL con Podman Compose para Kafka Connect</footer>
+  <footer>Guía — PostgreSQL con Podman Compose para Kafka Connect (ordersschema)</footer>
 </div>
 <script>
 document.querySelectorAll('pre').forEach(p=>{
