@@ -1,0 +1,25 @@
+#línea 1
+podman exec -it postgres psql -U demo -d demo
+
+línea 2
+CREATE TABLE orders (
+  order_id INT PRIMARY KEY,
+  customer TEXT NOT NULL,
+  amount NUMERIC
+);
+
+
+línea 3- verifica
+\d orders
+
+línea 4
+INSERT INTO orders (order_id, customer, amount)
+VALUES (1001, 'ana', 50.0),
+       (1002, 'luis', 120.0),
+       (1003, 'eva', 18.5);
+
+línea 5
+SELECT * FROM orders ORDER BY order_id;
+
+linea 6 
+quit
