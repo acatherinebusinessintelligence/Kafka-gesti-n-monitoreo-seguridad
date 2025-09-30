@@ -96,6 +96,13 @@ services:
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 3
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 3
 
+
+      #Convertidores false
+
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE="false" 
+      CONNECT_INTERNAL_KEY_CONVERTER= "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER="org.apache.kafka.connect.json.JsonConverter"
+
       # Convertidores (valor con esquema para JDBC)
       CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.storage.StringConverter"
       CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
