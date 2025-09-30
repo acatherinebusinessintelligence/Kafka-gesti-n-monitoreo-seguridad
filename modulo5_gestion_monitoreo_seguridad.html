@@ -15,7 +15,7 @@
     .wrap{ max-width:1100px; margin:28px auto 64px; padding:0 18px }
     header{ padding:24px 0 8px }
     h1{ margin:0 0 6px; font-size:clamp(26px,3.6vw,42px); color:var(--accent) }
-    .subtitle{ color:var(--muted); font-size:14px }
+    .subtitle{ color:#64748b; font-size:14px }
     h2{ margin-top:28px; font-size:22px; border-left:4px solid var(--accent); padding-left:10px }
     h3{ margin-top:16px; font-size:18px }
     p{ margin:10px 0 }
@@ -33,7 +33,7 @@
     table{ width:100%; border-collapse:collapse }
     th,td{ border:1px solid var(--border); padding:8px 10px; text-align:left }
     th{ background:#f8fafc }
-    footer{ margin-top:40px; color:var(--muted); font-size:12px; text-align:center }
+    footer{ margin-top:40px; color:#64748b; font-size:12px; text-align:center }
     .btn{ display:inline-block; background:#111827; color:#fff; padding:10px 14px; border-radius:10px; text-decoration:none }
   </style>
 </head>
@@ -66,9 +66,44 @@
       <p class="hint"><b>Atajo:</b> si usas mi script <code>kafka_lab.sh</code>, puedes levantar todo con <code>./kafka_lab.sh up</code> y crear el tópico de práctica automáticamente.</p>
     </section>
 
+    <section id="compose" class="card">
+      <h2>0) Opción A — Con <code>podman-compose</code> (recomendada)</h2>
+      <p>Usa tu archivo <code>podman-compose-kafka-3B.yml</code> para subir los 3 brokers. Asegúrate de usar el mismo <b>proyecto</b> que creó la red <code>kafka-lab_default</code> (por ejemplo <code>-p kafka-lab</code>).</p>
+      <pre><button class="copy">Copiar</button><code># Variables (ajusta si tu YAML está en otra ruta)
+COMPOSE=podman-compose-kafka-3B.yml
+PROJ=kafka-lab
+
+# 1) Zookeeper
+podman-compose -f "$COMPOSE" -p "$PROJ" up -d zookeeper
+
+# 2) Brokers
+podman-compose -f "$COMPOSE" -p "$PROJ" up -d kafka1 kafka2 kafka3
+
+# 3) Verifica
+podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}  {{.Ports}}"
+
+# 4) Red real del clúster (la del zookeeper)
+NET=$(podman inspect zookeeper -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+echo "RED: $NET"
+
+# 5) Comprobaciones
+podman exec -it kafka1 bash -lc 'getent hosts zookeeper || echo NO-RESUELVE'
+podman exec -it kafka1 bash -lc "zookeeper-shell zookeeper:2181 ls /brokers/ids"  # Debe mostrar [1, 2, 3]</code></pre>
+      <details>
+        <summary><b>Solución de problemas comunes</b></summary>
+        <ul>
+          <li><b>name already in use</b> → elimina contenedores viejos: <code>podman rm -f kafka1 kafka2 kafka3</code></li>
+          <li><b>Conflictos de puertos</b> (9092/9093/9094) → libera puertos o ajusta el YAML.</li>
+          <li><b>DNS/Red</b> → conecta servicios a la misma red: <code>podman network connect "$NET" postgres</code></li>
+          <li><b>Ver logs</b> → <code>podman logs -f --tail=200 kafka1</code> (busca <i>KafkaServer id=1 started</i>).</li>
+        </ul>
+      </details>
+    </section>
+
     <section class="card">
       <h2>Índice</h2>
       <ol>
+        <li><a href="#compose">Opción A — podman-compose</a></li>
         <li><a href="#connect">Kafka Connect + JDBC Sink (Postgres)</a></li>
         <li><a href="#streams">Kafka Streams · WordCount</a></li>
         <li><a href="#prom">Monitoreo con Prometheus</a></li>
@@ -366,6 +401,19 @@ podman exec -it kafka2 bash -lc \
       btn.addEventListener('click', async function() {
         const code = block.querySelector('code')?.innerText || '';
         try {
+          await navigator.clipboard.writeText(code);
+          const old = btn.textContent;
+          btn.textContent = '¡Copiado!';
+          setTimeout(() => btn.textContent = old, 1200);
+        } catch (e) {
+          alert('No se pudo copiar.');
+        }
+      });
+    });
+  </script>
+</body>
+</html>
+
           await navigator.clipboard.writeText(code);
           const old = btn.textContent;
           btn.textContent = '¡Copiado!';
