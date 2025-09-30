@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Módulo 5 — Gestión, Monitoreo y Seguridad · Kafka + Podman</title>
+  <style>
+    :root {
+      --bg:#f8fafc; --paper:#ffffff; --ink:#0b1220; --muted:#475569;
+      --accent:#0b1220; --border:#e2e8f0; --primary:#1e40af; --ok:#059669; --warn:#ca8a04; --err:#dc2626;
+      --code:#f1f5f9;
+    }
+    *{ box-sizing:border-box }
+    body{ margin:0; font-family: Inter,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--ink); line-height:1.75 }
+    .wrap{ max-width:1100px; margin:28px auto 64px; padding:0 18px }
+    header{ padding:24px 0 8px }
+    h1{ margin:0 0 6px; font-size:clamp(26px,3.6vw,42px); color:var(--accent) }
+    .subtitle{ color:var(--muted); font-size:14px }
+    h2{ margin-top:28px; font-size:22px; border-left:4px solid var(--accent); padding-left:10px }
+    h3{ margin-top:16px; font-size:18px }
+    p{ margin:10px 0 }
+    .card{ background:var(--paper); border:1px solid var(--border); border-radius:14px; padding:18px; margin:16px 0; box-shadow:0 2px 8px rgba(0,0,0,.04) }
+    .grid{ display:grid; gap:12px; grid-template-columns: repeat(2, minmax(0,1fr)) }
+    @media (max-width:900px){ .grid{ grid-template-columns:1fr } }
+    ul.check > li::marker { content: "✓  " }
+    ul.warn > li::marker { content: "⚠  " }
+    .hint{ border-left:3px solid var(--primary); background:#eef2ff; color:#1e3a8a; padding:12px 14px; border-radius:8px }
+    .danger{ border-left:3px solid var(--err); background:#fff1f2; color:#7f1d1d; padding:12px 14px; border-radius:8px }
+    code, pre{ font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px }
+    pre{ background:var(--code); border:1px solid var(--border); border-radius:10px; padding:12px; overflow:auto; position:relative }
+    .copy{ position:absolute; top:8px; right:8px; background:#e2e8f0; color:#334155; border:1px solid var(--border); border-radius:8px; padding:3px 8px; cursor:pointer; font-size:12px }
+    details summary{ cursor:pointer; font-weight:600 }
+    table{ width:100%; border-collapse:collapse }
+    th,td{ border:1px solid var(--border); padding:8px 10px; text-align:left }
+    th{ background:#f8fafc }
+    footer{ margin-top:40px; color:var(--muted); font-size:12px; text-align:center }
+    .btn{ display:inline-block; background:#111827; color:#fff; padding:10px 14px; border-radius:10px; text-decoration:none }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Módulo 5 · Gestión, Monitoreo y Seguridad</h1>
+      <div class="subtitle">Kafka + Podman · WSL2 · Actualizado: 2025-09-29</div>
+    </header>
+
+    <section class="card">
+      <h2>Objetivos</h2>
+      <ul class="check">
+        <li>Integrar Kafka con una <b>base de datos</b> vía <b>Kafka Connect</b> (JDBC Sink).</li>
+        <li>Construir una app de <b>Kafka Streams</b> (conteo de palabras).</li>
+        <li>Habilitar <b>monitoreo</b> con <b>Prometheus</b> y <code>kafka-exporter</code>.</li>
+        <li>Aplicar <b>ACLs</b> básicas para controlar lectura y escritura.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Prerrequisitos</h2>
+      <ul class="warn">
+        <li>Clúster activo: <code>zookeeper</code>, <code>kafka1</code>, <code>kafka2</code>, <code>kafka3</code> en la red <code>kafka-lab_default</code>.</li>
+        <li>Puertos en host libres: <code>8083</code> (Connect), <code>5432</code> (Postgres), <code>9090</code> (Prometheus), <code>9308</code> (kafka-exporter), <code>8080</code> (AKHQ opcional).</li>
+        <li>Internet para instalar el conector JDBC. Sin internet, ver el <b>Plan B</b> en Connect.</li>
+      </ul>
+      <pre><button class="copy">Copiar</button><code>podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}"
+# Debes ver zookeeper, kafka1, kafka2, kafka3 en 'kafka-lab_default'</code></pre>
+      <p class="hint"><b>Atajo:</b> si usas mi script <code>kafka_lab.sh</code>, puedes levantar todo con <code>./kafka_lab.sh up</code> y crear el tópico de práctica automáticamente.</p>
+    </section>
+
+    <section class="card">
+      <h2>Índice</h2>
+      <ol>
+        <li><a href="#connect">Kafka Connect + JDBC Sink (Postgres)</a></li>
+        <li><a href="#streams">Kafka Streams · WordCount</a></li>
+        <li><a href="#prom">Monitoreo con Prometheus</a></li>
+        <li><a href="#acls">Seguridad básica con ACLs</a></li>
+      </ol>
+    </section>
+
+    <section id="connect" class="card">
+      <h2>1) Kafka Connect — Integración con BD</h2>
+      <h3>1.1. Levantar Postgres</h3>
+      <pre><button class="copy">Copiar</button><code>NET=kafka-lab_default
+podman run --name=postgres -d --net $NET --network-alias postgres \
+  -e POSTGRES_DB=demo -e POSTGRES_USER=demo -e POSTGRES_PASSWORD=demo \
+  -p 5432:5432 docker.io/library/postgres:15
+podman logs -f --tail=50 postgres</code></pre>
+
+      <h3>1.2. Levantar Kafka Connect (distributed)</h3>
+      <pre><button class="copy">Copiar</button><code>podman run --name=connect -d --net $NET --network-alias connect -p 8083:8083 \
+  -e CONNECT_BOOTSTRAP_SERVERS=kafka1:29092,kafka2:29092,kafka3:29092 \
+  -e CONNECT_REST_ADVERTISED_HOST_NAME=connect \
+  -e CONNECT_GROUP_ID=connect-cluster \
+  -e CONNECT_CONFIG_STORAGE_TOPIC=_connect-configs \
+  -e CONNECT_OFFSET_STORAGE_TOPIC=_connect-offsets \
+  -e CONNECT_STATUS_STORAGE_TOPIC=_connect-status \
+  -e CONNECT_KEY_CONVERTER=org.apache.kafka.connect.storage.StringConverter \
+  -e CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter \
+  -e CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false \
+  -e CONNECT_INTERNAL_KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter \
+  -e CONNECT_INTERNAL_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter \
+  -e CONNECT_REST_PORT=8083 \
+  -e CONNECT_PLUGIN_PATH=/usr/share/java,/usr/share/confluent-hub-components \
+  docker.io/confluentinc/cp-kafka-connect:7.5.0
+
+# Comprobar API
+curl -s http://localhost:8083/connectors | jq .</code></pre>
+
+      <h3>1.3. Instalar el conector JDBC</h3>
+      <pre><button class="copy">Copiar</button><code>podman exec -it connect bash -lc '
+  confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:latest &&
+  echo "plugin.path=/usr/share/java,/usr/share/confluent-hub-components" >> /etc/kafka/connect-distributed.properties'
+podman restart connect</code></pre>
+      <details>
+        <summary><b>Plan B sin internet</b></summary>
+        <p>Usa los FileStream connectors (incluidos): crea un <i>FileStreamSource</i> y un <i>FileStreamSink</i> para demostrar el flujo sin JDBC.</p>
+      </details>
+
+      <h3>1.4. Crear tópico y producir datos</h3>
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
+  "kafka-topics --create --if-not-exists --topic orders \
+   --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
+
+podman exec -it kafka1 bash -lc \
+  "kafka-console-producer --bootstrap-server kafka1:29092 --topic orders \
+   --property parse.key=true --property key.separator=:" << 'EOF'
+1001:{"order_id":1001,"customer":"ana","amount":59.9}
+1002:{"order_id":1002,"customer":"luis","amount":120.0}
+1003:{"order_id":1003,"customer":"eva","amount":18.5}
+EOF</code></pre>
+
+      <h3>1.5. Crear JDBC Sink (REST)</h3>
+      <pre><button class="copy">Copiar</button><code>curl -s -X POST http://localhost:8083/connectors -H "Content-Type: application/json" -d '{
+  "name": "jdbc-sink-orders",
+  "config": {
+    "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+    "tasks.max": "1",
+    "topics": "orders",
+    "connection.url": "jdbc:postgresql://postgres:5432/demo",
+    "connection.user": "demo",
+    "connection.password": "demo",
+    "auto.create": "true",
+    "auto.evolve": "true",
+    "insert.mode": "insert",
+    "pk.mode": "record_key",
+    "pk.fields": "order_id",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}' | jq .</code></pre>
+
+      <h3>1.6. Verificar en Postgres</h3>
+      <pre><button class="copy">Copiar</button><code>podman exec -it postgres bash -lc 'apt-get update && apt-get install -y postgresql-client'
+podman exec -it postgres bash -lc \
+  'psql -U demo -d demo -h localhost -c "SELECT * FROM orders ORDER BY order_id;"'</code></pre>
+    </section>
+
+    <section id="streams" class="card">
+      <h2>2) Kafka Streams — WordCount</h2>
+      <h3>2.1. Tópicos de entrada/salida</h3>
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
+  "kafka-topics --create --if-not-exists --topic sentences --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
+podman exec -it kafka1 bash -lc \
+  "kafka-topics --create --if-not-exists --topic wordcount --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"</code></pre>
+
+      <h3>2.2. Proyecto mínimo con Maven (en contenedor)</h3>
+      <pre><button class="copy">Copiar</button><code>mkdir -p streams-wc/src/main/java
+cat > streams-wc/src/main/java/WordCount.java <<'JAVA'
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.kstream.*;
+import java.util.Arrays;
+import java.util.Properties;
+
+public class WordCount {
+  public static void main(String[] args) {
+    Properties p = new Properties();
+    p.put(StreamsConfig.APPLICATION_ID_CONFIG, "wordcount-app");
+    p.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "kafka1:29092,kafka2:29092,kafka3:29092");
+    p.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+    p.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+
+    StreamsBuilder b = new StreamsBuilder();
+    KStream<String, String> input = b.stream("sentences");
+    KTable<String, Long> counts = input
+      .flatMapValues(v -> Arrays.asList(v.toLowerCase().split("\\W+")))
+      .groupBy((k, word) -> word, Grouped.with(Serdes.String(), Serdes.String()))
+      .count();
+    counts.toStream().mapValues(Object::toString).to("wordcount");
+
+    KafkaStreams app = new KafkaStreams(b.build(), p);
+    app.start();
+    Runtime.getRuntime().addShutdownHook(new Thread(app::close));
+  }
+}
+JAVA
+
+cat > streams-wc/pom.xml <<'POM'
+<project xmlns="http://maven.apache.org/POM/4.0.0"  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>demo</groupId>
+  <artifactId>streams-wc</artifactId>
+  <version>1.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-streams</artifactId>
+      <version>3.7.0</version>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.11.0</version>
+        <configuration>
+          <source>17</source><target>17</target>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.1.0</version>
+        <configuration>
+          <mainClass>WordCount</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+POM
+
+# Ejecutar dentro de un contenedor Maven conectado a la red de Kafka
+podman run --rm -it -v "$PWD/streams-wc":/src --net kafka-lab_default \
+  docker.io/library/maven:3-eclipse-temurin-17 bash -lc \
+  "cd /src && mvn -q -DskipTests package && mvn -q -DskipTests exec:java"</code></pre>
+
+      <h3>2.3. Probar WordCount</h3>
+      <pre><button class="copy">Copiar</button><code># Producir oraciones
+podman exec -it kafka1 bash -lc \
+  "kafka-console-producer --bootstrap-server kafka1:29092 --topic sentences" << 'EOF'
+Hola Kafka Kafka Rocks
+Kafka Streams cuenta palabras
+hola mundo hola
+EOF
+
+# Ver resultados
+podman exec -it kafka2 bash -lc \
+  "kafka-console-consumer --bootstrap-server kafka2:29092 --topic wordcount --from-beginning --timeout-ms 15000"</code></pre>
+    </section>
+
+    <section id="prom" class="card">
+      <h2>3) Monitoreo con Prometheus</h2>
+      <h3>3.1. kafka-exporter</h3>
+      <pre><button class="copy">Copiar</button><code>podman run --name=kafka-exporter -d --net kafka-lab_default --network-alias kafka-exporter \
+  -p 9308:9308 quay.io/danielqsj/kafka-exporter \
+  --kafka.server=kafka1:29092 --kafka.server=kafka2:29092 --kafka.server=kafka3:29092</code></pre>
+
+      <h3>3.2. Prometheus</h3>
+      <pre><button class="copy">Copiar</button><code>cat > prometheus.yml <<'YAML'
+global:
+  scrape_interval: 10s
+scrape_configs:
+  - job_name: 'kafka-exporter'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+YAML
+
+podman run --name=prom -d --net kafka-lab_default -p 9090:9090 \
+  -v "$PWD/prometheus.yml":/etc/prometheus/prometheus.yml:ro \
+  docker.io/prom/prometheus
+
+# Abre http://localhost:9090 y consulta:
+#   kafka_consumergroup_current_offset
+#   kafka_consumergroup_lag</code></pre>
+
+      <details>
+        <summary><b>3.3. (Opcional) AKHQ UI</b></summary>
+        <pre><button class="copy">Copiar</button><code>podman run --name=akhq -d --net kafka-lab_default -p 8080:8080 \
+  -e AKHQ_CONFIGURATION='akhq:
+    connections:
+      lab:
+        properties:
+          bootstrap.servers: "kafka1:29092,kafka2:29092,kafka3:29092"
+  ' tchiotludo/akhq:latest
+# UI: http://localhost:8080</code></pre>
+      </details>
+    </section>
+
+    <section id="acls" class="card">
+      <h2>4) Seguridad básica — ACLs</h2>
+      <p class="danger"><b>Nota de laboratorio:</b> para simplificar, habilitamos el authorizer y declaramos <code>ANONYMOUS</code> como superusuario sólo en el laboratorio. <b>No usar en producción</b>.</p>
+
+      <h3>4.1. Reiniciar brokers con Authorizer</h3>
+      <pre><button class="copy">Copiar</button><code># Repite cambiando BROKER_ID y puerto host para kafka2/kafka3
+NET=kafka-lab_default
+podman rm -f kafka1
+podman run --replace --name=kafka1 -d --net $NET --network-alias kafka1 -p 9092:9092 \
+  -e KAFKA_BROKER_ID=1 \
+  -e KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 \
+  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT \
+  -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092 \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,INTERNAL://kafka1:29092 \
+  -e KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3 \
+  -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3 \
+  -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2 \
+  -e KAFKA_MIN_INSYNC_REPLICAS=2 \
+  -e KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer \
+  -e KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=false \
+  -e KAFKA_SUPER_USERS=User:ANONYMOUS \
+  docker.io/confluentinc/cp-kafka:7.5.0
+
+# Espera a que /brokers/ids vuelva a mostrar [1,2,3]</code></pre>
+
+      <h3>4.2. Comprobar denegación (sin ACL)</h3>
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
+  "echo prueba | kafka-console-producer --bootstrap-server kafka1:29092 --topic orders"
+# Resultado esperado: Topic authorization failed</code></pre>
+
+      <h3>4.3. Crear ACLs mínimas</h3>
+      <pre><button class="copy">Copiar</button><code># Topic: Describe, Read, Write para ANONYMOUS
+podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --add \
+  --allow-principal "User:ANONYMOUS" --operation Describe --operation Read --operation Write --topic orders'
+
+# Group: Read para el grupo 'gdemo'
+podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --add \
+  --allow-principal "User:ANONYMOUS" --operation Read --group gdemo'</code></pre>
+
+      <h3>4.4. Probar permisos</h3>
+      <pre><button class="copy">Copiar</button><code># Producir
+podman exec -it kafka1 bash -lc \
+  "printf 'acl1\nacl2\n' | kafka-console-producer --bootstrap-server kafka1:29092 --topic orders"
+
+# Consumir
+podman exec -it kafka2 bash -lc \
+  "kafka-console-consumer --bootstrap-server kafka2:29092 --topic orders --group gdemo --from-beginning --timeout-ms 15000"</code></pre>
+
+      <h3>4.5. Ver/limpiar ACLs</h3>
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --list'
+# Ejemplo de borrado:
+# kafka-acls --bootstrap-server kafka1:29092 --remove --topic orders --allow-principal "User:ANONYMOUS" --operation Write</code></pre>
+    </section>
+
+    <section class="card">
+      <h2>Cierre y verificación</h2>
+      <ul class="check">
+        <li><b>Connect</b>: ¿ves filas en <code>orders</code> dentro de Postgres?</li>
+        <li><b>Streams</b>: ¿se publicaron conteos en <code>wordcount</code>?</li>
+        <li><b>Prometheus</b>: ¿métricas de <code>kafka-exporter</code> consultables?</li>
+        <li><b>ACLs</b>: ¿falló sin permisos y funcionó tras agregarlos?</li>
+      </ul>
+    </section>
+
+    <footer>© 2025 · Módulo 5 — Gestión, Monitoreo y Seguridad · Preparado para talleres Kafka con Podman</footer>
+  </div>
+
+  <script>
+    document.querySelectorAll('pre').forEach(function(block) {
+      const btn = block.querySelector('.copy');
+      if (!btn) return;
+      btn.addEventListener('click', async function() {
+        const code = block.querySelector('code')?.innerText || '';
+        try {
+          await navigator.clipboard.writeText(code);
+          const old = btn.textContent;
+          btn.textContent = '¡Copiado!';
+          setTimeout(() => btn.textContent = old, 1200);
+        } catch (e) {
+          alert('No se pudo copiar.');
+        }
+      });
+    });
+  </script>
+</body>
+</html>
