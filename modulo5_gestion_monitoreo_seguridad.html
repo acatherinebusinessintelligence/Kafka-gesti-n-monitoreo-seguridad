@@ -41,7 +41,7 @@
   <div class="wrap">
     <header>
       <h1>Módulo 5 · Gestión, Monitoreo y Seguridad</h1>
-      <div class="subtitle">Kafka + Podman · WSL2 · Actualizado: 2025-09-29</div>
+      <div class="subtitle">Kafka + Podman · WSL2 · Actualizado: 2025-09-30</div>
     </header>
 
     <section class="card">
@@ -84,7 +84,7 @@ podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}  {{.Ports}}"
 
 # 4) Red real del clúster (la del zookeeper)
 NET=$(podman inspect zookeeper -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
-echo "RED: $NET"
+echo "$NET"   # debería ser kafka-lab_default
 
 # 5) Comprobaciones
 podman exec -it kafka1 bash -lc 'getent hosts zookeeper || echo NO-RESUELVE'
@@ -115,27 +115,11 @@ podman exec -it kafka1 bash -lc "zookeeper-shell zookeeper:2181 ls /brokers/ids"
       <h2>1) Kafka Connect — Integración con BD</h2>
       <h3>1.1. Levantar Postgres</h3>
       <pre><button class="copy">Copiar</button><code>NET=kafka-lab_default
-podman run --name=postgres -d --net $NET --network-alias postgres \
-  -e POSTGRES_DB=demo -e POSTGRES_USER=demo -e POSTGRES_PASSWORD=demo \
-  -p 5432:5432 docker.io/library/postgres:15
+podman run --name=postgres -d --net $NET --network-alias postgres   -e POSTGRES_DB=demo -e POSTGRES_USER=demo -e POSTGRES_PASSWORD=demo   -p 5432:5432 docker.io/library/postgres:15
 podman logs -f --tail=50 postgres</code></pre>
 
       <h3>1.2. Levantar Kafka Connect (distributed)</h3>
-      <pre><button class="copy">Copiar</button><code>podman run --name=connect -d --net $NET --network-alias connect -p 8083:8083 \
-  -e CONNECT_BOOTSTRAP_SERVERS=kafka1:29092,kafka2:29092,kafka3:29092 \
-  -e CONNECT_REST_ADVERTISED_HOST_NAME=connect \
-  -e CONNECT_GROUP_ID=connect-cluster \
-  -e CONNECT_CONFIG_STORAGE_TOPIC=_connect-configs \
-  -e CONNECT_OFFSET_STORAGE_TOPIC=_connect-offsets \
-  -e CONNECT_STATUS_STORAGE_TOPIC=_connect-status \
-  -e CONNECT_KEY_CONVERTER=org.apache.kafka.connect.storage.StringConverter \
-  -e CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter \
-  -e CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false \
-  -e CONNECT_INTERNAL_KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter \
-  -e CONNECT_INTERNAL_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter \
-  -e CONNECT_REST_PORT=8083 \
-  -e CONNECT_PLUGIN_PATH=/usr/share/java,/usr/share/confluent-hub-components \
-  docker.io/confluentinc/cp-kafka-connect:7.5.0
+      <pre><button class="copy">Copiar</button><code>podman run --name=connect -d --net $NET --network-alias connect -p 8083:8083   -e CONNECT_BOOTSTRAP_SERVERS=kafka1:29092,kafka2:29092,kafka3:29092   -e CONNECT_REST_ADVERTISED_HOST_NAME=connect   -e CONNECT_GROUP_ID=connect-cluster   -e CONNECT_CONFIG_STORAGE_TOPIC=_connect-configs   -e CONNECT_OFFSET_STORAGE_TOPIC=_connect-offsets   -e CONNECT_STATUS_STORAGE_TOPIC=_connect-status   -e CONNECT_KEY_CONVERTER=org.apache.kafka.connect.storage.StringConverter   -e CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter   -e CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false   -e CONNECT_INTERNAL_KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter   -e CONNECT_INTERNAL_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter   -e CONNECT_REST_PORT=8083   -e CONNECT_PLUGIN_PATH=/usr/share/java,/usr/share/confluent-hub-components   docker.io/confluentinc/cp-kafka-connect:7.5.0
 
 # Comprobar API
 curl -s http://localhost:8083/connectors | jq .</code></pre>
@@ -151,13 +135,9 @@ podman restart connect</code></pre>
       </details>
 
       <h3>1.4. Crear tópico y producir datos</h3>
-      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
-  "kafka-topics --create --if-not-exists --topic orders \
-   --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc   "kafka-topics --create --if-not-exists --topic orders    --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
 
-podman exec -it kafka1 bash -lc \
-  "kafka-console-producer --bootstrap-server kafka1:29092 --topic orders \
-   --property parse.key=true --property key.separator=:" << 'EOF'
+podman exec -it kafka1 bash -lc   "kafka-console-producer --bootstrap-server kafka1:29092 --topic orders    --property parse.key=true --property key.separator=:" << 'EOF'
 1001:{"order_id":1001,"customer":"ana","amount":59.9}
 1002:{"order_id":1002,"customer":"luis","amount":120.0}
 1003:{"order_id":1003,"customer":"eva","amount":18.5}
@@ -186,17 +166,14 @@ EOF</code></pre>
 
       <h3>1.6. Verificar en Postgres</h3>
       <pre><button class="copy">Copiar</button><code>podman exec -it postgres bash -lc 'apt-get update && apt-get install -y postgresql-client'
-podman exec -it postgres bash -lc \
-  'psql -U demo -d demo -h localhost -c "SELECT * FROM orders ORDER BY order_id;"'</code></pre>
+podman exec -it postgres bash -lc   'psql -U demo -d demo -h localhost -c "SELECT * FROM orders ORDER BY order_id;"'</code></pre>
     </section>
 
     <section id="streams" class="card">
       <h2>2) Kafka Streams — WordCount</h2>
       <h3>2.1. Tópicos de entrada/salida</h3>
-      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
-  "kafka-topics --create --if-not-exists --topic sentences --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
-podman exec -it kafka1 bash -lc \
-  "kafka-topics --create --if-not-exists --topic wordcount --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"</code></pre>
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc   "kafka-topics --create --if-not-exists --topic sentences --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"
+podman exec -it kafka1 bash -lc   "kafka-topics --create --if-not-exists --topic wordcount --partitions 3 --replication-factor 3 --bootstrap-server kafka1:29092"</code></pre>
 
       <h3>2.2. Proyecto mínimo con Maven (en contenedor)</h3>
       <pre><button class="copy">Copiar</button><code>mkdir -p streams-wc/src/main/java
@@ -220,7 +197,7 @@ public class WordCount {
     StreamsBuilder b = new StreamsBuilder();
     KStream<String, String> input = b.stream("sentences");
     KTable<String, Long> counts = input
-      .flatMapValues(v -> Arrays.asList(v.toLowerCase().split("\\W+")))
+      .flatMapValues(v -> Arrays.asList(v.toLowerCase().split("\W+")))
       .groupBy((k, word) -> word, Grouped.with(Serdes.String(), Serdes.String()))
       .count();
     counts.toStream().mapValues(Object::toString).to("wordcount");
@@ -270,30 +247,24 @@ cat > streams-wc/pom.xml <<'POM'
 POM
 
 # Ejecutar dentro de un contenedor Maven conectado a la red de Kafka
-podman run --rm -it -v "$PWD/streams-wc":/src --net kafka-lab_default \
-  docker.io/library/maven:3-eclipse-temurin-17 bash -lc \
-  "cd /src && mvn -q -DskipTests package && mvn -q -DskipTests exec:java"</code></pre>
+podman run --rm -it -v "$PWD/streams-wc":/src --net kafka-lab_default   docker.io/library/maven:3-eclipse-temurin-17 bash -lc   "cd /src && mvn -q -DskipTests package && mvn -q -DskipTests exec:java"</code></pre>
 
       <h3>2.3. Probar WordCount</h3>
       <pre><button class="copy">Copiar</button><code># Producir oraciones
-podman exec -it kafka1 bash -lc \
-  "kafka-console-producer --bootstrap-server kafka1:29092 --topic sentences" << 'EOF'
+podman exec -it kafka1 bash -lc   "kafka-console-producer --bootstrap-server kafka1:29092 --topic sentences" << 'EOF'
 Hola Kafka Kafka Rocks
 Kafka Streams cuenta palabras
 hola mundo hola
 EOF
 
 # Ver resultados
-podman exec -it kafka2 bash -lc \
-  "kafka-console-consumer --bootstrap-server kafka2:29092 --topic wordcount --from-beginning --timeout-ms 15000"</code></pre>
+podman exec -it kafka2 bash -lc   "kafka-console-consumer --bootstrap-server kafka2:29092 --topic wordcount --from-beginning --timeout-ms 15000"</code></pre>
     </section>
 
     <section id="prom" class="card">
       <h2>3) Monitoreo con Prometheus</h2>
       <h3>3.1. kafka-exporter</h3>
-      <pre><button class="copy">Copiar</button><code>podman run --name=kafka-exporter -d --net kafka-lab_default --network-alias kafka-exporter \
-  -p 9308:9308 quay.io/danielqsj/kafka-exporter \
-  --kafka.server=kafka1:29092 --kafka.server=kafka2:29092 --kafka.server=kafka3:29092</code></pre>
+      <pre><button class="copy">Copiar</button><code>podman run --name=kafka-exporter -d --net kafka-lab_default --network-alias kafka-exporter   -p 9308:9308 quay.io/danielqsj/kafka-exporter   --kafka.server=kafka1:29092 --kafka.server=kafka2:29092 --kafka.server=kafka3:29092</code></pre>
 
       <h3>3.2. Prometheus</h3>
       <pre><button class="copy">Copiar</button><code>cat > prometheus.yml <<'YAML'
@@ -305,9 +276,7 @@ scrape_configs:
       - targets: ['kafka-exporter:9308']
 YAML
 
-podman run --name=prom -d --net kafka-lab_default -p 9090:9090 \
-  -v "$PWD/prometheus.yml":/etc/prometheus/prometheus.yml:ro \
-  docker.io/prom/prometheus
+podman run --name=prom -d --net kafka-lab_default -p 9090:9090   -v "$PWD/prometheus.yml":/etc/prometheus/prometheus.yml:ro   docker.io/prom/prometheus
 
 # Abre http://localhost:9090 y consulta:
 #   kafka_consumergroup_current_offset
@@ -315,8 +284,7 @@ podman run --name=prom -d --net kafka-lab_default -p 9090:9090 \
 
       <details>
         <summary><b>3.3. (Opcional) AKHQ UI</b></summary>
-        <pre><button class="copy">Copiar</button><code>podman run --name=akhq -d --net kafka-lab_default -p 8080:8080 \
-  -e AKHQ_CONFIGURATION='akhq:
+        <pre><button class="copy">Copiar</button><code>podman run --name=akhq -d --net kafka-lab_default -p 8080:8080   -e AKHQ_CONFIGURATION='akhq:
     connections:
       lab:
         properties:
@@ -334,46 +302,29 @@ podman run --name=prom -d --net kafka-lab_default -p 9090:9090 \
       <pre><button class="copy">Copiar</button><code># Repite cambiando BROKER_ID y puerto host para kafka2/kafka3
 NET=kafka-lab_default
 podman rm -f kafka1
-podman run --replace --name=kafka1 -d --net $NET --network-alias kafka1 -p 9092:9092 \
-  -e KAFKA_BROKER_ID=1 \
-  -e KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 \
-  -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT \
-  -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092 \
-  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,INTERNAL://kafka1:29092 \
-  -e KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL \
-  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3 \
-  -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3 \
-  -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2 \
-  -e KAFKA_MIN_INSYNC_REPLICAS=2 \
-  -e KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer \
-  -e KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=false \
-  -e KAFKA_SUPER_USERS=User:ANONYMOUS \
-  docker.io/confluentinc/cp-kafka:7.5.0
+podman run --replace --name=kafka1 -d --net $NET --network-alias kafka1 -p 9092:9092   -e KAFKA_BROKER_ID=1   -e KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181   -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT   -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092   -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,INTERNAL://kafka1:29092   -e KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL   -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3   -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3   -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2   -e KAFKA_MIN_INSYNC_REPLICAS=2   -e KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer   -e KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=false   -e KAFKA_SUPER_USERS=User:ANONYMOUS   docker.io/confluentinc/cp-kafka:7.5.0
 
 # Espera a que /brokers/ids vuelva a mostrar [1,2,3]</code></pre>
 
       <h3>4.2. Comprobar denegación (sin ACL)</h3>
-      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc \
-  "echo prueba | kafka-console-producer --bootstrap-server kafka1:29092 --topic orders"
+      <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc   "echo prueba | kafka-console-producer --bootstrap-server kafka1:29092 --topic orders"
 # Resultado esperado: Topic authorization failed</code></pre>
 
       <h3>4.3. Crear ACLs mínimas</h3>
       <pre><button class="copy">Copiar</button><code># Topic: Describe, Read, Write para ANONYMOUS
-podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --add \
-  --allow-principal "User:ANONYMOUS" --operation Describe --operation Read --operation Write --topic orders'
+podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --add   --allow-principal "User:ANONYMOUS" --operation Describe --operation Read --operation Write --topic orders'
 
 # Group: Read para el grupo 'gdemo'
-podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --add \
-  --allow-principal "User:ANONYMOUS" --operation Read --group gdemo'</code></pre>
+podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --add   --allow-principal "User:ANONYMOUS" --operation Read --group gdemo'</code></pre>
 
       <h3>4.4. Probar permisos</h3>
       <pre><button class="copy">Copiar</button><code># Producir
-podman exec -it kafka1 bash -lc \
-  "printf 'acl1\nacl2\n' | kafka-console-producer --bootstrap-server kafka1:29092 --topic orders"
+podman exec -it kafka1 bash -lc   "printf 'acl1
+acl2
+' | kafka-console-producer --bootstrap-server kafka1:29092 --topic orders"
 
 # Consumir
-podman exec -it kafka2 bash -lc \
-  "kafka-console-consumer --bootstrap-server kafka2:29092 --topic orders --group gdemo --from-beginning --timeout-ms 15000"</code></pre>
+podman exec -it kafka2 bash -lc   "kafka-console-consumer --bootstrap-server kafka2:29092 --topic orders --group gdemo --from-beginning --timeout-ms 15000"</code></pre>
 
       <h3>4.5. Ver/limpiar ACLs</h3>
       <pre><button class="copy">Copiar</button><code>podman exec -it kafka1 bash -lc 'kafka-acls --bootstrap-server kafka1:29092 --list'
@@ -401,19 +352,6 @@ podman exec -it kafka2 bash -lc \
       btn.addEventListener('click', async function() {
         const code = block.querySelector('code')?.innerText || '';
         try {
-          await navigator.clipboard.writeText(code);
-          const old = btn.textContent;
-          btn.textContent = '¡Copiado!';
-          setTimeout(() => btn.textContent = old, 1200);
-        } catch (e) {
-          alert('No se pudo copiar.');
-        }
-      });
-    });
-  </script>
-</body>
-</html>
-
           await navigator.clipboard.writeText(code);
           const old = btn.textContent;
           btn.textContent = '¡Copiado!';
