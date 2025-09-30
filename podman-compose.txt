@@ -14,3 +14,12 @@ podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}  {{.Ports}}"
 # 4) Prueba DNS y registro en ZK
 podman exec -it kafka1 bash -lc 'getent hosts zookeeper || echo NO-RESUELVE'
 podman exec -it kafka1 bash -lc "zookeeper-shell zookeeper:2181 ls /brokers/ids"
+Qué deberías ver
+
+En podman ps: kafka1, kafka2, kafka3 en kafka-lab_default.
+
+En zookeeper-shell ... /brokers/ids: algo como [1, 2, 3].
+
+Si podman-compose up -d no crea los brokers y no sale error claro, ejecuta con logs:
+
+podman-compose -f "$COMPOSE" -p "$PROJ" up kafka1 kafka2 kafka3
