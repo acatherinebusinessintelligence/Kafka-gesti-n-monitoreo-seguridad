@@ -32,6 +32,31 @@ Este módulo guía a tus estudiantes a:
 - Si la red o DNS no resuelven (`zookeeper`/`kafkaN`), verifica que los contenedores estén conectados a `kafka-lab_default`.
 - Para GitHub Pages, coloca el HTML en `docs/` y habilita Pages apuntando a `main /docs`.
 
+- # PostgreSQL con Podman Compose · Integración con Kafka Connect (JDBC Sink)
+
+Guía paso a paso para levantar **PostgreSQL** con **podman-compose** y conectarlo desde **Kafka Connect (JDBC Sink)**. Probado en WSL2 + Ubuntu 24.04.
+
+---
+
+## Cómo encaja con Kafka
+
+**Productores → Topic Kafka (`orders_schema`) → Kafka Connect (JDBC Sink) → PostgreSQL (tabla `orders`)**.
+
+El JDBC Sink necesita tipos de datos. Por eso se recomienda enviar mensajes **con esquema** (JSON con `schema`/`payload`) o usar Avro/Protobuf con Schema Registry.
+
+---
+
+## Prerrequisitos
+
+- Clúster Kafka activo: `zookeeper`, `kafka1`, `kafka2`, `kafka3`.
+- Todos los contenedores en la **misma red** (típicamente `kafka-lab_default`).
+
+```bash
+podman ps --format "{{.Names}}  {{.Networks}}  {{.Status}}"
+NET=$(podman inspect zookeeper -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+echo "$NET"   # debería ser kafka-lab_default
+
+
 ---
 
 **Autora:** Alejandra Montaña  
