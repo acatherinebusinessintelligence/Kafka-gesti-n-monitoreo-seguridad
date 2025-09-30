@@ -115,4 +115,4 @@ services:
 # Usa la red "default" del proyecto (se creará automáticamente como kafka-lab3_default si usas -p kafka-lab3)
 # No es necesario declarar networks para la mayoría de casos simples.
 
-#para levantarlo: podman-compose -f podman-compose-kafka-3B.yml -p kafka-lab3 up -d
+
