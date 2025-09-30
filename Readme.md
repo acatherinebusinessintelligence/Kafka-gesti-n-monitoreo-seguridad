@@ -9,7 +9,7 @@ Este módulo guía a tus estudiantes a:
 - Aplicar **ACLs** para controlar permisos en tópicos y grupos.
 
 ## Archivos principales
-- `modulo5_gestion_monitoreo_seguridad.html` — Guía paso a paso (recomendada).
+- `https://acatherinebusinessintelligence.github.io/Kafka-gesti-n-monitoreo-seguridad/modulo5_gestion_monitoreo_seguridad.html` — Guía paso a paso (recomendada).
 
 > Los archivos auxiliares (por ejemplo `prometheus.yml`, proyecto `streams-wc/`) se crean **durante** el taller siguiendo la guía.
 
