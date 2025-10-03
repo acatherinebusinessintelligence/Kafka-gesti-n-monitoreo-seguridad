@@ -1,7 +1,8 @@
-import json, sqlite3, time, random, string
+import json, sqlite3, time, random, string, re
 import pandas as pd
 import streamlit as st
 import altair as alt
+from collections import Counter
 
 # Kafka
 try:
@@ -10,8 +11,8 @@ try:
 except Exception:
     HAS_KAFKA = False
 
-st.set_page_config(page_title="DB ↔ Kafka (Simple + Monitor)", page_icon="🧩", layout="wide")
-st.title("🧩 DB ↔ Kafka — Simple + Monitoreo")
+st.set_page_config(page_title="DB ↔ Kafka (Simple + Monitor + WordCount)", page_icon="🧩", layout="wide")
+st.title("🧩 DB ↔ Kafka — Monitoreo + WordCount")
 
 with st.sidebar:
     st.header("Conexión")
@@ -22,7 +23,7 @@ with st.sidebar:
     simulate = st.checkbox("Simular sin Kafka", value=not HAS_KAFKA)
     st.caption(f"Cliente Kafka disponible: {'Sí' if HAS_KAFKA else 'No'}")
 
-tab_db, tab_mon = st.tabs(["📤 DB → Kafka", "📡 Monitoreo y Consumo"])
+tab_db, tab_mon, tab_wc = st.tabs(["📤 DB → Kafka", "📡 Monitoreo y Consumo", "🧮 WordCount (Streaming)"])
 
 # -------------------- Helpers --------------------
 def ensure_table(conn, table):
@@ -64,6 +65,17 @@ def topic_message_count(bootstrap, topic, timeout=5):
     finally:
         try: c.close()
         except Exception: pass
+
+# Helpers WordCount
+WORD_RE = re.compile(r"[A-Za-zÀ-ÿ0-9_]+")
+def normalize_text(s: str) -> list[str]:
+    return [t.lower() for t in WORD_RE.findall(s or "")]
+def wordcount_batch(messages: list[str]) -> Counter:
+    c = Counter()
+    for msg in messages:
+        for w in normalize_text(msg):
+            c[w] += 1
+    return c
 
 # -------------------- TAB 1: DB -> Kafka --------------------
 with tab_db:
@@ -129,7 +141,7 @@ with tab_db:
     with cpub1:
         btn = st.button("Publicar a Kafka" if not simulate else "Simular publicación", key="publish_btn")
     with cpub2:
-        btn_repub = st.button("Re-publicar datos de la BD", help="Vuelve a leer la tabla y reenvía todo al tópico")
+        btn_repub = st.button("Re-publicar datos de la BD")
 
     if (btn or btn_repub):
         if df.empty:
@@ -157,182 +169,146 @@ with tab_mon:
     st.subheader("Estado del broker y tópicos")
     colA, colB = st.columns([1,1])
 
-    # ---- A) Metadatos + gráficos + ADMIN de tópicos
+    # ---- A) Metadatos + gráficos
     with colA:
         topics_data = []
         if not HAS_KAFKA:
             st.error("confluent-kafka no está instalado en este entorno.")
         else:
             ac = admin.AdminClient({"bootstrap.servers": bootstrap})
-
             if st.button("Refrescar metadatos de cluster"):
                 try:
                     md = ac.list_topics(timeout=5)
                     st.success(f"Cluster OK — {len(md.topics)} tópicos")
                     for tname, tmeta in md.topics.items():
                         if tname.startswith("__"):
-                            continue  # oculta internos "__*"
+                            continue
                         partitions = len(tmeta.partitions)
-                        topics_data.append({"topic": tname, "partitions": partitions, "err": str(tmeta.error) if tmeta.error else ""})
+                        topics_data.append({"topic": tname, "partitions": partitions})
                     if topics_data:
                         tdf = pd.DataFrame(topics_data)
-                        tdf["tipo"] = tdf["topic"].apply(lambda s: "interno" if is_internal(s) else "usuario")
-                        st.dataframe(tdf.sort_values("topic"), use_container_width=True, height=240)
-
-                        st.markdown("**Particiones por tópico**")
-                        chart = (
-                            alt.Chart(tdf)
-                            .mark_bar()
-                            .encode(
-                                x=alt.X("topic:N", sort="-y", title="tópico"),
-                                y=alt.Y("partitions:Q", title="particiones"),
-                                color=alt.Color("tipo:N", legend=alt.Legend(title="tipo")),
-                                tooltip=["topic","partitions","tipo"],
-                            ).properties(height=240)
-                        )
-                        st.altair_chart(chart, use_container_width=True)
-
-                        st.markdown("### Volumen de mensajes por tópico (estimado)")
-                        calc = st.checkbox("Calcular mensajes por tópico (puede tardar un poco)", value=True, key="calc_counts")
-                        if calc:
-                            counts = []
-                            for tname in tdf["topic"].tolist():
-                                total, _detail = topic_message_count(bootstrap, tname, timeout=5)
-                                counts.append({"topic": tname, "msg_count": int(total)})
-                            cdf = pd.DataFrame(counts).sort_values("msg_count", ascending=False)
-                            st.dataframe(cdf, use_container_width=True, height=200)
-
-                            cchart = (
-                                alt.Chart(cdf)
-                                .mark_bar()
-                                .encode(
-                                    x=alt.X("topic:N", sort="-y", title="tópico"),
-                                    y=alt.Y("msg_count:Q", title="mensajes (estimado)"),
-                                    tooltip=["topic","msg_count"],
-                                ).properties(height=240)
-                            )
-                            st.altair_chart(cchart, use_container_width=True)
-                    else:
-                        st.info("No hay tópicos visibles (o solo internos).")
+                        st.dataframe(tdf.sort_values("topic"), use_container_width=True, height=200)
                 except Exception as e:
                     st.error(f"No se pudo obtener metadatos: {e}")
 
-            # --- ADMIN: Crear / Re-crear / Aumentar particiones
-            with st.expander("⚙️ Administrar tópico"):
-                admin_topic = st.text_input("Nombre de tópico", value=topic, help="Se usará este nombre")
-                parts = st.number_input("Particiones deseadas", min_value=1, max_value=200, value=3, step=1)
-                repl = st.number_input("Replication factor", min_value=1, max_value=5, value=1, step=1)
-
-                ccol1, ccol2, ccol3 = st.columns([1,1,1])
-                if ccol1.button("Crear tópico"):
-                    try:
-                        fs = ac.create_topics([admin.NewTopic(admin_topic, num_partitions=int(parts), replication_factor=int(repl))])
-                        fs[admin_topic].result()
-                        st.success(f"Creado '{admin_topic}' con {parts} particiones (RF={repl}).")
-                    except Exception as e:
-                        st.error(f"No se pudo crear: {e}")
-
-                if ccol2.button("Re-crear (BORRA y crea)"):
-                    try:
-                        ac.delete_topics([admin_topic])
-                        st.warning(f"Solicitada eliminación de '{admin_topic}'…")
-                        time.sleep(2)
-                        fs = ac.create_topics([admin.NewTopic(admin_topic, num_partitions=int(parts), replication_factor=int(repl))])
-                        fs[admin_topic].result()
-                        st.success(f"Re-creado '{admin_topic}' con {parts} particiones (RF={repl}).")
-                    except Exception as e:
-                        st.error(f"No se pudo recrear: {e}")
-
-                if ccol3.button("Aumentar particiones (no reduce)"):
-                    try:
-                        # Sólo permite INCREMENTAR. No se puede bajar el número de particiones.
-                        fs = ac.create_partitions({admin_topic: admin.NewPartitions(int(parts))})
-                        fs[admin_topic].result()
-                        st.success(f"Aumentadas particiones de '{admin_topic}' a {parts}.")
-                    except Exception as e:
-                        st.error(f"No se pudo aumentar particiones: {e}")
-
     # ---- B) Consumidor rápido
     with colB:
-        st.markdown("**Consumidor rápido (lectura puntual)**")
+        st.markdown("**Consumidor rápido**")
         num_msgs = st.number_input("Cantidad a leer", min_value=1, max_value=1000, value=10, step=1)
-        from_begin = st.checkbox("Forzar leer TODO desde el comienzo", value=True)
-        unique_gid = st.checkbox("Usar group.id único (evita offsets guardados)", value=True)
-        timeout_s = st.slider("Tiempo máximo de lectura (seg)", 1, 60, 10)
-
+        from_begin = st.checkbox("Desde el comienzo", value=True)
         if st.button("Leer ahora"):
             try:
-                gid_base = "streamlit-probe"
-                gid = gid_base + "-" + "".join(random.choice(string.ascii_lowercase) for _ in range(6)) if unique_gid else gid_base
+                gid = "probe-" + "".join(random.choice(string.ascii_lowercase) for _ in range(6))
                 conf = {
                     "bootstrap.servers": bootstrap,
                     "group.id": gid,
                     "enable.auto.commit": False,
-                    "auto.offset.reset": "earliest",
+                    "auto.offset.reset": "earliest" if from_begin else "latest",
                 }
                 c = Consumer(conf)
-
-                # asignación manual para fijar offset al low watermark
-                md = c.list_topics(topic, timeout=5)
-                tmeta = md.topics.get(topic)
-                if tmeta is None or tmeta.error is not None:
-                    st.error(f"Tópico '{topic}' no encontrado o con error: {tmeta.error if tmeta else 'desconocido'}")
+                c.subscribe([topic])
+                msgs = []
+                deadline = time.time() + 5
+                while len(msgs) < num_msgs and time.time() < deadline:
+                    m = c.poll(0.5)
+                    if m is None: continue
+                    if m.error(): continue
+                    try:
+                        payload = json.loads(m.value().decode("utf-8"))
+                    except Exception:
+                        payload = {"raw": m.value().decode("utf-8","ignore")}
+                    msgs.append(payload)
+                c.close()
+                if msgs:
+                    st.dataframe(pd.DataFrame(msgs), use_container_width=True, height=280)
                 else:
-                    assignments = []
-                    for pid, _pmeta in tmeta.partitions.items():
-                        tp = TopicPartition(topic, pid)
-                        low, high = c.get_watermark_offsets(tp, timeout=5)
-                        tp.offset = low if from_begin else -1001  # -1001=Offset.INVALID (usará auto.offset.reset)
-                        assignments.append(tp)
-
-                    c.assign(assignments)
-
-                    msgs = []
-                    deadline = time.time() + timeout_s
-                    while len(msgs) < num_msgs and time.time() < deadline:
-                        m = c.poll(0.5)
-                        if m is None: 
-                            continue
-                        if m.error():
-                            if m.error().code() == KafkaError._PARTITION_EOF:
-                                continue
-                            else:
-                                st.error(f"Error de consumo: {m.error()}")
-                                break
-
-                        raw = m.value()
-                        try:
-                            payload = json.loads(raw.decode("utf-8"))
-                        except Exception:
-                            payload = None
-
-                        ts_type, ts_val = m.timestamp()
-                        key = None
-                        if m.key() is not None:
-                            try: key = m.key().decode("utf-8")
-                            except Exception: key = str(m.key())
-                        headers = {}
-                        if m.headers():
-                            for k, v in m.headers():
-                                headers[k] = (v.decode("utf-8") if isinstance(v,(bytes,bytearray)) else v)
-
-                        row = {
-                            "_topic": m.topic(),
-                            "_partition": m.partition(),
-                            "_offset": m.offset(),
-                            "_timestamp": ts_val,
-                            "_key": key,
-                            "_headers": headers,
-                            "json": payload,
-                            "raw": raw.decode("utf-8","replace"),
-                        }
-                        msgs.append(row)
-
-                    c.close()
-                    if msgs:
-                        st.success(f"Leídos {len(msgs)} mensajes de '{topic}'")
-                        st.dataframe(pd.DataFrame(msgs), use_container_width=True, height=320)
-                    else:
-                        st.info("No se leyeron mensajes (quizá no hay nuevos o el timeout fue corto).")
+                    st.info("No se leyeron mensajes.")
             except Exception as e:
                 st.error(f"No se pudo consumir: {e}")
+
+# -------------------- TAB 3: WORDCOUNT --------------------
+with tab_wc:
+    st.subheader("WordCount por lote (consume → cuenta → publica)")
+
+    if not HAS_KAFKA:
+        st.error("confluent-kafka no está instalado en este entorno.")
+    else:
+        col = st.columns(2)
+        with col[0]:
+            input_topic = st.text_input("Tópico de entrada", value="wordcount_in")
+            output_topic = st.text_input("Tópico de salida", value="wordcount_out")
+        with col[1]:
+            batch_msgs = st.number_input("Máx. mensajes a leer", 1, 10000, 100, step=10)
+            timeout_s = st.slider("Tiempo de lectura (seg)", 1, 60, 8)
+            top_n = st.slider("Top-N palabras", 5, 50, 20)
+
+        ac = admin.AdminClient({"bootstrap.servers": bootstrap})
+        def ensure_topic(topic_name: str, partitions=1, rf=1):
+            try:
+                md = ac.list_topics(timeout=3)
+                if topic_name not in md.topics:
+                    fs = ac.create_topics([admin.NewTopic(topic_name, num_partitions=partitions, replication_factor=rf)])
+                    fs[topic_name].result()
+                    st.success(f"Creado tópico '{topic_name}' ({partitions} particiones)")
+            except Exception as e:
+                st.warning(f"No se pudo crear/verificar tópico '{topic_name}': {e}")
+
+        if st.button("Asegurar tópicos (in/out)"):
+            ensure_topic(input_topic)
+            ensure_topic(output_topic)
+
+        with st.expander("✍️ Generar ejemplos (input)"):
+            sample_lines = st.text_area("Líneas de ejemplo", value="Hola Kafka desde Streamlit\nKafka es genial para streaming\ndatos datos datos")
+            if st.button("Publicar ejemplos"):
+                try:
+                    p = Producer({"bootstrap.servers": bootstrap})
+                    count = 0
+                    for line in sample_lines.splitlines():
+                        if not line.strip(): continue
+                        p.produce(input_topic, line.strip().encode("utf-8"))
+                        count += 1
+                    p.flush(5)
+                    st.success(f"Publicadas {count} líneas en '{input_topic}'")
+                except Exception as e:
+                    st.error(f"No se pudo publicar: {e}")
+
+        if st.button("Ejecutar WordCount"):
+            try:
+                gid = "wc-" + "".join(random.choice(string.ascii_lowercase) for _ in range(6))
+                conf = {"bootstrap.servers": bootstrap, "group.id": gid, "enable.auto.commit": False, "auto.offset.reset": "earliest"}
+                c = Consumer(conf)
+                c.subscribe([input_topic])
+
+                raw_lines = []
+                deadline = time.time() + timeout_s
+                while len(raw_lines) < batch_msgs and time.time() < deadline:
+                    m = c.poll(0.5)
+                    if m is None: continue
+                    if m.error(): continue
+                    raw_lines.append(m.value().decode("utf-8","replace"))
+                c.close()
+
+                st.info(f"Leídas {len(raw_lines)} líneas")
+                counts = wordcount_batch(raw_lines)
+                if not counts:
+                    st.warning("No tokens encontrados")
+                else:
+                    df_wc = pd.DataFrame(counts.items(), columns=["word","count"]).sort_values("count",ascending=False)
+                    st.dataframe(df_wc.head(top_n), use_container_width=True, height=300)
+
+                    p = Producer({"bootstrap.servers": bootstrap})
+                    for w,n in counts.items():
+                        payload = json.dumps({"word": w, "count": int(n)}, ensure_ascii=False)
+                        p.produce(output_topic, payload.encode("utf-8"))
+                    p.flush(10)
+                    st.success(f"Publicados {len(counts)} registros en '{output_topic}'")
+
+                    chart = (
+                        alt.Chart(df_wc.head(top_n))
+                        .mark_bar()
+                        .encode(x=alt.X("word:N", sort="-y"), y=alt.Y("count:Q"), tooltip=["word","count"])
+                        .properties(height=280)
+                    )
+                    st.altair_chart(chart, use_container_width=True)
+            except Exception as e:
+                st.error(f"Falló WordCount: {e}")
